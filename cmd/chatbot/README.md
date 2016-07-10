@@ -24,5 +24,5 @@ CREATE TABLE markovbot.first_words (
 
 #### Env
 
-`GAS_DB_NAME`: value should be `postgres`
-`GAS_DB_PARAMS`: postgres connection string e.g. `dbname=... user=... password=... sslmode=...`
+* `GAS_DB_NAME`: value should be `postgres`
+* `GAS_DB_PARAMS`: postgres connection string e.g. `dbname=... user=... password=... sslmode=...`
