@@ -10,6 +10,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"os/signal"
 	"regexp"
 	"strings"
 	"time"
@@ -23,23 +24,25 @@ import (
 
 // Config is the struct which should mirror the config json file
 type Config struct {
-	Network       string   `json:,omitempty`
-	Nick          string   `json:,omitempty`
-	User          string   `json:,omitempty`
-	Realname      string   `json:,omitempty`
-	RespondChance float64  `json:,omitempty`
-	JoinChannels  []string `json:,omitempty`
-	NickservPass  string   `json:,omitempty`
+	Network       string
+	Secure        bool
+	Nick          string
+	User          string
+	Realname      string
+	RespondChance float64
+	JoinChannels  []string
+	NickservPass  string
 	LogVerbose    bool
+	WPM           float64
 	Ignore        struct {
-		Nick []string `json:,omitempty`
-		Line []string `json:,omitempty`
-		Word []string `json:,omitempty`
+		Nick []string
+		Line []string
+		Word []string
 
 		nickPatterns []*regexp.Regexp
 		linePatterns []*regexp.Regexp
 		wordPatterns []*regexp.Regexp
-	} `json:,omitempty`
+	}
 }
 
 var (
@@ -172,6 +175,7 @@ func main() {
 		User:     config.User,
 		Realname: config.Realname,
 		Verbose:  config.LogVerbose,
+		Secure:   config.Secure,
 	}
 
 	c.HandleFunc("PRIVMSG", handlePRIVMSG)
@@ -184,17 +188,24 @@ func main() {
 		}
 	}()
 
+	sig := make(chan os.Signal)
+	signal.Notify(sig, os.Interrupt)
+
+	go func() {
+		<-sig
+		os.Exit(1)
+	}()
+
 	for {
 		if err := c.Connect(); err == nil {
 			err = c.Run()
 			if err == nil {
 				return
 			}
+		} else {
+			log.Print(err)
+			time.Sleep(5 * time.Second)
 		}
-
-		log.Print(err)
-
-		time.Sleep(5 * time.Second)
 	}
 }
 
@@ -261,6 +272,14 @@ func channelmsg(c *irc.Client, m *irc.Message) {
 			return
 		}
 		log.Printf("query took %v", time.Since(t))
+
+		if config.WPM > 0 {
+			sz := float64(len(strings.Fields(s)))
+			delay1 := (rand.Float64() * rand.Float64() * rand.Float64()) * 3000 // noticing delay
+			delay2 := (sz / config.WPM) * 60 * 1000                             // typing delay
+			log.Printf("delaying %d + %d ms", int64(delay1), int64(delay2))
+			time.Sleep(time.Duration(delay1+delay2) * time.Millisecond)
+		}
 
 		c.PRIVMSG(m.Target().Name(), s)
 	} else {
