@@ -48,15 +48,26 @@ func (c *Client) Connect() error {
 		return errEmptyUser
 	}
 
-	conn, err := net.Dial("tcp", c.Addr)
+	var (
+		conn net.Conn
+		err  error
+	)
+
+	conn, err = net.Dial("tcp", c.Addr)
 	if err != nil {
 		return err
 	}
 
 	if c.Secure {
-		host, _, _ := net.SplitHostPort(c.Addr)
-		tlsConf := tls.Config{ServerName: host}
-		conn = tls.Client(conn, &tlsConf)
+		//host, _, _ := net.SplitHostPort(c.Addr)
+		tlsConf := tls.Config{InsecureSkipVerify: true}
+		tlsConn := tls.Client(conn, &tlsConf)
+		err = tlsConn.Handshake()
+		if err != nil {
+			return err
+		}
+
+		conn = tlsConn
 	}
 
 	c.conn = conn
