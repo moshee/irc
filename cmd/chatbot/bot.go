@@ -29,6 +29,7 @@ type Config struct {
 	Realname      string   `json:,omitempty`
 	RespondChance float64  `json:,omitempty`
 	JoinChannels  []string `json:,omitempty`
+	NickservPass  string   `json:,omitempty`
 	LogVerbose    bool
 	Ignore        struct {
 		Nick []string `json:,omitempty`
@@ -184,14 +185,14 @@ func main() {
 	}()
 
 	for {
-		if err := c.Connect(); err != nil {
-			log.Print(err)
-		} else {
+		if err := c.Connect(); err == nil {
 			err = c.Run()
 			if err == nil {
 				return
 			}
 		}
+
+		log.Print(err)
 
 		time.Sleep(5 * time.Second)
 	}
@@ -274,6 +275,9 @@ func privatemsg(c *irc.Client, m *irc.Message) {
 func handleMODE(c *irc.Client, m *irc.Message) {
 	if !loggedIn && m.From.Nick == c.Nick && len(m.Params) > 0 && m.Params[0] == c.Nick {
 		loggedIn = true
+		if config.NickservPass != "" {
+			c.PRIVMSG("NickServ", "IDENTIFY "+config.NickservPass)
+		}
 		for _, ch := range config.JoinChannels {
 			parts := strings.SplitN(ch, ":", 2)
 			switch len(parts) {
@@ -283,6 +287,7 @@ func handleMODE(c *irc.Client, m *irc.Message) {
 				c.JOIN(parts[0], parts[1])
 			}
 		}
+
 	}
 }
 
