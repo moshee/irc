@@ -47,7 +47,6 @@ type Config struct {
 
 var (
 	config         Config
-	loggedIn       = false
 	upsertStmt     *sql.Stmt
 	buildStmt      *sql.Stmt
 	popularityStmt *sql.Stmt
@@ -179,7 +178,7 @@ func main() {
 	}
 
 	c.HandleFunc("PRIVMSG", handlePRIVMSG)
-	c.HandleFunc("MODE", handleMODE)
+	c.HandleFunc("001", handleLogin)
 
 	go func() {
 		s := bufio.NewScanner(os.Stdin)
@@ -291,22 +290,18 @@ func privatemsg(c *irc.Client, m *irc.Message) {
 
 }
 
-func handleMODE(c *irc.Client, m *irc.Message) {
-	if !loggedIn && m.From.Nick == c.Nick && len(m.Params) > 0 && m.Params[0] == c.Nick {
-		loggedIn = true
-		if config.NickservPass != "" {
-			c.PRIVMSG("NickServ", "IDENTIFY "+config.NickservPass)
+func handleLogin(c *irc.Client, m *irc.Message) {
+	if config.NickservPass != "" {
+		c.PRIVMSG("NickServ", "IDENTIFY "+config.NickservPass)
+	}
+	for _, ch := range config.JoinChannels {
+		parts := strings.SplitN(ch, ":", 2)
+		switch len(parts) {
+		case 1:
+			c.JOIN(parts[0])
+		case 2:
+			c.JOIN(parts[0], parts[1])
 		}
-		for _, ch := range config.JoinChannels {
-			parts := strings.SplitN(ch, ":", 2)
-			switch len(parts) {
-			case 1:
-				c.JOIN(parts[0])
-			case 2:
-				c.JOIN(parts[0], parts[1])
-			}
-		}
-
 	}
 }
 
