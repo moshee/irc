@@ -6,6 +6,7 @@ import (
 	"strings"
 )
 
+// SendRaw sends a raw command string to the remote server.
 func (c *Client) SendRaw(s string) {
 	m, err := ParseMessage(s)
 	if err != nil {
@@ -16,6 +17,7 @@ func (c *Client) SendRaw(s string) {
 	c.send <- m
 }
 
+// Command sends a well-formed command to the remote server.
 func (c *Client) Command(cmd string, params []string, trailing ...string) {
 	m := &Message{
 		Command: cmd,

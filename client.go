@@ -14,6 +14,7 @@ import (
 	"ktkr.us/pkg/irc/ratelimit"
 )
 
+// Client contains all of the state required by an event-driven IRC client.
 type Client struct {
 	Addr     string
 	Nick     string
@@ -28,7 +29,7 @@ type Client struct {
 	send     chan *Message
 	recv     chan *Message
 	err      chan error
-	handlers map[string]Handler
+	handlers map[string][]Handler
 	l        *ratelimit.Limiter
 
 	chans []*Channel
@@ -40,6 +41,7 @@ var (
 	errEmptyUser = errors.New("irc: cannot use empty username")
 )
 
+// Connect logs c into the configured host.
 func (c *Client) Connect() error {
 	if c.Nick == "" {
 		return errEmptyNick
@@ -76,6 +78,8 @@ func (c *Client) Connect() error {
 	c.err = make(chan error)
 	c.l = ratelimit.New(time.Second, 4)
 
+	c.Stack(defaultHandlers)
+
 	firstLineCh := make(chan struct{})
 
 	go c.recvLoop(firstLineCh)
@@ -94,6 +98,7 @@ func (c *Client) Connect() error {
 	return nil
 }
 
+// recvLoop processes all network reads and handles incoming events.
 func (c *Client) recvLoop(firstLineCh chan struct{}) {
 	s := bufio.NewScanner(c.conn)
 	for s.Scan() {
@@ -117,17 +122,16 @@ func (c *Client) recvLoop(firstLineCh chan struct{}) {
 			continue
 		}
 
-		// user handlers override built-in ones
-		if handler, ok := c.handlers[m.Command]; ok && handler != nil {
-			handler.HandleIRC(c, m)
-		} else if handler, ok = clientHandlers[m.Command]; ok && handler != nil {
-			handler.HandleIRC(c, m)
+		if handlers, ok := c.handlers[m.Command]; ok {
+			for _, h := range handlers {
+				h.HandleIRC(c, m)
+			}
 		}
 	}
 }
 
-// Gate all sends so chunks don't get interleaved accidentally when doing
-// concurrent handlers. We can also do rate limiting here.
+// sendLoop gates all sends so chunks don't get interleaved accidentally when
+// doing concurrent handlers. We can also do rate limiting here.
 func (c *Client) sendLoop() {
 	for {
 		c.l.GrabTicket()
@@ -140,19 +144,25 @@ func (c *Client) sendLoop() {
 	}
 }
 
-func (c *Client) Handle(command string, handler Handler) {
+// Handle adds a Handler to run when `cmd` is received.
+func (c *Client) Handle(cmd string, h Handler) {
 	if c.handlers == nil {
-		c.handlers = map[string]Handler{command: handler}
+		c.handlers = map[string][]Handler{cmd: []Handler{h}}
 	} else {
-		c.handlers[command] = handler
+		if c.handlers[cmd] == nil {
+			c.handlers[cmd] = []Handler{h}
+		} else {
+			c.handlers[cmd] = append(c.handlers[cmd], h)
+		}
 	}
 }
 
-func (c *Client) HandleFunc(command string, handler HandlerFunc) {
-	c.Handle(command, handler)
+// HandleFunc adds a HandlerFunc to run when `cmd` is received.
+func (c *Client) HandleFunc(cmd string, handler HandlerFunc) {
+	c.Handle(cmd, handler)
 }
 
-// blocks until the connection is closed
+// Run handles events and blocks until the connection is closed
 func (c *Client) Run() error {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt)
@@ -166,6 +176,15 @@ func (c *Client) Run() error {
 	}
 }
 
+// Stack appends handlers from hs to c.
+func (c *Client) Stack(hs HandlerSet) {
+	for k, v := range hs {
+		c.Handle(k, v)
+	}
+}
+
+// chanByName returns the Channel object corresponding to channel named `name`,
+// or nil if c isn't joined to it.
 func (c *Client) chanByName(name string) *Channel {
 	for _, ch := range c.chans {
 		if ch.Name == name {

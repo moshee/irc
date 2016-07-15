@@ -1,16 +1,13 @@
 package irc
 
-// TODO: implement concept of stackable, orthogonal "handler sets" that can be
-// used to compose bot behavior in a modular fashion. There would simply be a
-// slice of handlers for each command and each handler set would be able to
-// have its own state (e.g. via interface?)
-
 import (
 	"errors"
 	"strings"
 )
 
-var clientHandlers = map[string]Handler{
+type HandlerSet map[string]Handler
+
+var defaultHandlers = HandlerSet{
 	// server ping
 	"PING": HandlerFunc(func(c *Client, m *Message) {
 		var pingMessage string
@@ -22,16 +19,16 @@ var clientHandlers = map[string]Handler{
 		c.Command("PONG", []string{pingMessage})
 	}),
 
+	// disconnected by server
+	"ERROR": HandlerFunc(func(c *Client, m *Message) {
+		c.err <- errors.New(m.Trailing)
+	}),
+
 	// someone's nick changed
 	"NICK": HandlerFunc(func(c *Client, m *Message) {
 		if m.From.Nick == c.Nick {
 			c.Nick = m.Trailing
 		}
-	}),
-
-	// someone's nick changed
-	"ERROR": HandlerFunc(func(c *Client, m *Message) {
-		c.err <- errors.New(m.Trailing)
 	}),
 
 	// nickname already in use
