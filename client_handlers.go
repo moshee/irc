@@ -1,8 +1,10 @@
 package irc
 
 import (
-	"errors"
+	"log"
 	"strings"
+
+	"github.com/pkg/errors"
 )
 
 type HandlerSet map[string]Handler
@@ -19,9 +21,14 @@ var defaultHandlers = HandlerSet{
 		c.Command("PONG", []string{pingMessage})
 	}),
 
+	"PONG": HandlerFunc(func(c *Client, m *Message) {
+		log.Print(m)
+		c.ping <- m
+	}),
+
 	// disconnected by server
 	"ERROR": HandlerFunc(func(c *Client, m *Message) {
-		c.err <- errors.New(m.Trailing)
+		c.err <- errors.New("server error: " + m.Trailing)
 	}),
 
 	// someone's nick changed
@@ -29,12 +36,6 @@ var defaultHandlers = HandlerSet{
 		if m.From.Nick == c.Nick {
 			c.Nick = m.Trailing
 		}
-	}),
-
-	// nickname already in use
-	"433": HandlerFunc(func(c *Client, m *Message) {
-		c.Nick += "_"
-		c.NICK(c.Nick)
 	}),
 
 	// available modes
@@ -45,50 +46,6 @@ var defaultHandlers = HandlerSet{
 	// server capabilities
 	"005": HandlerFunc(func(c *Client, m *Message) {
 		// http://www.irc.org/tech_docs/005.html
-		//
-		// :clarent.nc.us.irchighway.net
-		//	005
-		//	bully
-		//	AWAYLEN=200
-		//	CASEMAPPING=rfc1459
-		//	CHANMODES=b,k,l,ACMNORSTcimnprstz
-		//	CHANNELLEN=64
-		//	CHANTYPES=#
-		//	CHARSET=ascii
-		//	ELIST=MU
-		//	ESILENCE
-		//	EXTBAN=,ACNORSTUcjmz
-		//	FNC
-		//	KICKLEN=255
-		//	MAP
-		//	MAXBANS=60
-		//	:are supported by this server
-		// :clarent.nc.us.irchighway.net
-		//	005
-		//	bully
-		//	MAXCHANNELS=30
-		//	MAXPARA=32
-		//	MAXTARGETS=20
-		//	MODES=20
-		//	NAMESX
-		//	NETWORK=irchighway
-		//	NICKLEN=31
-		//	PREFIX=(qaohv)~&@%+
-		//	SILENCE=32
-		//	SSL=199.241.190.42:6697
-		//	STARTTLS
-		//	STATUSMSG=~&@%+
-		//	TOPICLEN=307
-		//	:are supported by this server
-		// :clarent.nc.us.irchighway.net
-		//	005
-		//	bully
-		//	UHNAMES
-		//	USERIP
-		//	VBANLIST
-		//	WALLCHOPS
-		//	WALLVOICES
-		//	:are supported by this server
 
 		if c.caps == nil {
 			c.caps = make(map[string]string, len(m.Params))
@@ -152,5 +109,11 @@ var defaultHandlers = HandlerSet{
 			thisChan.gettingNames = false
 			close(thisChan.namesChan)
 		}
+	}),
+
+	// nickname already in use
+	"433": HandlerFunc(func(c *Client, m *Message) {
+		c.Nick += "_"
+		c.NICK(c.Nick)
 	}),
 }

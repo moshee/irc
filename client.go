@@ -3,32 +3,38 @@ package irc
 import (
 	"bufio"
 	"crypto/tls"
-	"errors"
+	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"os/signal"
 	"time"
+
+	"github.com/pkg/errors"
 
 	"ktkr.us/pkg/irc/ratelimit"
 )
 
 // Client contains all of the state required by an event-driven IRC client.
 type Client struct {
-	Addr     string
-	Nick     string
-	User     string
-	Realname string
-	Pass     string
-	Secure   bool // true to attempt TLS
-	Verbose  bool
+	Addr        string
+	Nick        string
+	User        string
+	Realname    string
+	Pass        string
+	Secure      bool // true to attempt TLS
+	Verbose     bool
+	PingTimeout time.Duration
 
 	conn net.Conn
 
 	send     chan *Message
 	recv     chan *Message
+	ping     chan *Message
 	err      chan error
+	die      chan struct{}
 	handlers map[string][]Handler
 	l        *ratelimit.Limiter
 
@@ -50,6 +56,19 @@ func (c *Client) Connect() error {
 		return errEmptyUser
 	}
 
+	c.send = make(chan *Message, 10)
+	c.recv = make(chan *Message, 10)
+	c.ping = make(chan *Message)
+	c.err = make(chan error)
+	c.die = make(chan struct{})
+	c.l = ratelimit.New(time.Second, 4)
+
+	c.Stack(defaultHandlers)
+
+	return c.connect()
+}
+
+func (c *Client) connect() error {
 	var (
 		conn net.Conn
 		err  error
@@ -73,17 +92,14 @@ func (c *Client) Connect() error {
 	}
 
 	c.conn = conn
-	c.send = make(chan *Message, 10)
-	c.recv = make(chan *Message, 10)
-	c.err = make(chan error)
-	c.l = ratelimit.New(time.Second, 4)
-
-	c.Stack(defaultHandlers)
 
 	firstLineCh := make(chan struct{})
 
 	go c.recvLoop(firstLineCh)
 	go c.sendLoop()
+	if c.PingTimeout != 0 {
+		go c.pingLoop()
+	}
 
 	// wait until we recieve the first data from the server to begin sending
 	// commands
@@ -101,30 +117,41 @@ func (c *Client) Connect() error {
 // recvLoop processes all network reads and handles incoming events.
 func (c *Client) recvLoop(firstLineCh chan struct{}) {
 	s := bufio.NewScanner(c.conn)
-	for s.Scan() {
-		if err := s.Err(); err != nil {
-			c.err <- err
-			break
-		}
-		if firstLineCh != nil {
-			close(firstLineCh)
-			firstLineCh = nil
-		}
+	for {
+		select {
+		case <-c.die:
+			return
 
-		line := s.Text()
-		if c.Verbose {
-			log.Println("<<", line)
-		}
+		default:
+			if !s.Scan() {
+				return
+			}
+			if err := s.Err(); err != nil {
+				c.err <- errors.Wrap(err, "recvLoop")
+				break
+			}
+			if firstLineCh != nil {
+				close(firstLineCh)
+				firstLineCh = nil
+			}
 
-		m, err := ParseMessage(line, time.Now())
-		if err != nil {
-			log.Print("irc: client recv: %v", err)
-			continue
-		}
+			line := s.Text()
+			if c.Verbose {
+				log.Println("<<", line)
+			}
 
-		if handlers, ok := c.handlers[m.Command]; ok {
-			for _, h := range handlers {
-				h.HandleIRC(c, m)
+			m, err := ParseMessage(line, time.Now())
+			if err != nil {
+				log.Print("irc: client recv: %v", err)
+				continue
+			}
+
+			if handlers, ok := c.handlers[m.Command]; ok {
+				for _, h := range handlers {
+					h.HandleIRC(c, m)
+				}
+			} else {
+				log.Print("unhandled msg: ", m)
 			}
 		}
 	}
@@ -134,13 +161,45 @@ func (c *Client) recvLoop(firstLineCh chan struct{}) {
 // doing concurrent handlers. We can also do rate limiting here.
 func (c *Client) sendLoop() {
 	for {
-		c.l.GrabTicket()
-		m := <-c.send
-		s := m.String()
-		if c.Verbose {
-			log.Println(">>", s)
+		select {
+		case <-c.die:
+			return
+		default:
+			c.l.GrabTicket()
+			m := <-c.send
+			s := m.String()
+			if c.Verbose {
+				log.Println(">>", s)
+			}
+			io.WriteString(c.conn, s+"\r\n")
 		}
-		io.WriteString(c.conn, s+"\r\n")
+	}
+}
+
+func (c *Client) pingLoop() {
+	t := time.NewTicker(c.PingTimeout)
+
+	for {
+		select {
+		case <-c.die:
+			return
+		case <-t.C:
+			r := fmt.Sprintf("%8X", rand.Int63())
+			log.Print("sending ping: ", r)
+			c.Command("PING", []string{r})
+			select {
+			case <-time.After(c.PingTimeout):
+				c.err <- errors.Errorf("ping timeout (%d seconds)", c.PingTimeout/time.Second)
+
+			case m := <-c.ping:
+				log.Printf("got ping %q", m.Trailing)
+				if m.Trailing != r {
+					c.err <- errors.Errorf("server ping failure: sent %q, got %q", r, m.Trailing)
+				} else {
+					log.Print("got successful pong ", m.Trailing)
+				}
+			}
+		}
 	}
 }
 
@@ -164,16 +223,25 @@ func (c *Client) HandleFunc(cmd string, handler HandlerFunc) {
 
 // Run handles events and blocks until the connection is closed
 func (c *Client) Run() error {
-	ch := make(chan os.Signal, 1)
+	var (
+		ch  = make(chan os.Signal, 1)
+		err error
+	)
+
 	signal.Notify(ch, os.Interrupt)
-	for {
-		select {
-		case err := <-c.err:
-			return err
-		case <-ch:
-			return nil
-		}
+	defer c.conn.Close()
+
+	select {
+	case err = <-c.err:
+		log.Print("caught error: ", err)
+	case sig := <-ch:
+		log.Print("caught signal: ", sig)
 	}
+
+	log.Print("quitting Run")
+
+	close(c.die)
+	return err
 }
 
 // Stack appends handlers from hs to c.

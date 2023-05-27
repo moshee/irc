@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"testing"
 	"time"
+	"unicode"
 )
 
 var (
@@ -59,32 +61,132 @@ func (h *Hostmask) MatchString(other string) bool {
 }
 
 func (h *Hostmask) Match(other *Hostmask) bool {
+	/*
+		return MatchPattern(h.Nick, other.Nick) &&
+			MatchPattern(h.User, other.User) &&
+			MatchPattern(h.Address, other.Address)
+	*/
 	return true
 }
 
-// * matches 0 or more characters
-// ? matches exactly one character
-/*
-func matchPattern(mask, s string) bool {
-	if len(mask) == 0 {
+// MatchPattern performs a case-insensitive fuzzy string comparison using the
+// following syntax:
+//     - * matches 0 or more characters
+//     - ? matches exactly one character
+func MatchPattern(pattern, s string, t *testing.T) bool {
+	t.Log()
+	t.Logf("%q <=> %q\n", pattern, s)
+
+	if len(pattern) == 0 {
+		t.Log("bail false: empty pattern matches nothing")
 		return false
 	}
 
-	mask = strings.ToLower(mask)
+	pattern = strings.ToLower(pattern)
 	s = strings.ToLower(s)
-	if mask == s {
+
+	// might match erroneously?
+	if pattern == s {
+		t.Log("bail true: strings are equal")
 		return true
 	}
 
 	var (
-		imask int
-		is int
-		nextChar rune
-		c rune
+		i, j           int
+		a, b, nextChar rune
+		patternRunes   = []rune(pattern)
+		sRunes         = []rune(s)
 	)
 
+	// guarantees:
+	// - len(pattern) > 0
+	// - pattern != s
+	for {
+		/*
+			sEnd	patternEnd	result
+			0		0			keep going
+			0		1			fail - string has too many chars
+			1		0			fail - pattern wants to match more chars
+			1		1			done
+		*/
+		sEnd := i > len(sRunes)-1
+		patternEnd := j > len(patternRunes)-1
+
+		t.Logf("sEnd = %t, patternEnd = %t\n", sEnd, patternEnd)
+
+		if sEnd == patternEnd {
+			if sEnd {
+				t.Log("finished: whole pattern match")
+				break
+			}
+		} else if patternEnd {
+			t.Log("bail false: string has too many chars")
+			return false
+		}
+
+		b = patternRunes[j]
+
+		if sEnd && b != '*' {
+			t.Log("bail false: pattern has too many chars")
+			return false
+		}
+
+		//           0123  len = 4
+		// pattern: "...*"
+		//              ^
+		//              j = 3
+		// condition true if we see * and are at the end of the string
+		if b == '*' && j >= len(patternRunes)-1 {
+			// anything beyond the end will match
+			t.Log("bail true: catch-all end splat")
+			return true
+		}
+
+		a = sRunes[i]
+
+		// check for next character after splat matching
+		if b == '*' {
+			nextChar = patternRunes[j+1]
+		}
+
+		match, advance := matchChar(a, b, nextChar)
+
+		t.Logf("matchChar(%q, %q, %q) match=%t advance=%t\n", a, b, nextChar, match, advance)
+
+		if !match {
+			t.Log("bail false: unmatched char")
+			return false
+		}
+
+		// aa*ba
+		// aa12345ba
+		// aa******a
+		// ttffffftt
+
+		if advance {
+			j++
+			if b == '*' {
+				j++
+			}
+		}
+
+		i++
+
+	}
+
+	return true
 }
-*/
+
+func matchChar(a, b, next rune) (match, advance bool) {
+	switch b {
+	case '*':
+		return true, a == next
+	case '?':
+		return true, true
+	default:
+		return unicode.ToLower(a) == unicode.ToLower(b), true
+	}
+}
 
 type MessageTarget interface {
 	Name() string

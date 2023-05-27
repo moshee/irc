@@ -1,4 +1,8 @@
 // TODO: periodically remove pairs with very low occurrence to avoid gathering flukes as cruft
+// TODO: relay bot integration
+// TODO: twitter scrape integration
+// TODO: chatbot 2.0 ~neural net ver.~
+// TODO: admin interface (send raw commands, etc)
 package main
 
 import (
@@ -128,8 +132,15 @@ func main() {
 		flagPrime  = flag.Bool("prime", false, "prime database with logs from STDIN")
 		flagInsert = flag.String("insert", "", "just insert a pair and exit (comma separated)")
 		flagC      = flag.String("c", "", "path to config file")
+		flagHTTP   = flag.String("http", "", "addr:port for debug interface (blank = disable)")
 	)
 	flag.Parse()
+
+	if *flagHTTP != "" {
+		go func() {
+			log.Fatal(http.ListenAndServe(*flagHTTP, nil))
+		}()
+	}
 
 	err := loadConfig(*flagC)
 	if err != nil {
@@ -164,17 +175,14 @@ func main() {
 		return
 	}
 
-	go func() {
-		log.Fatal(http.ListenAndServe(":6060", nil))
-	}()
-
 	c := &irc.Client{
-		Addr:     config.Network,
-		Nick:     config.Nick,
-		User:     config.User,
-		Realname: config.Realname,
-		Verbose:  config.LogVerbose,
-		Secure:   config.Secure,
+		Addr:        config.Network,
+		Nick:        config.Nick,
+		User:        config.User,
+		Realname:    config.Realname,
+		Verbose:     config.LogVerbose,
+		Secure:      config.Secure,
+		PingTimeout: 4 * time.Minute,
 	}
 
 	c.HandleFunc("PRIVMSG", handlePRIVMSG)
@@ -199,9 +207,11 @@ func main() {
 		if err := c.Connect(); err == nil {
 			err = c.Run()
 			if err == nil {
-				return
+				break
 			}
-		} else {
+		}
+
+		if err != nil {
 			log.Print(err)
 			time.Sleep(5 * time.Second)
 		}
